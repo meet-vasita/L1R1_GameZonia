@@ -186,6 +186,14 @@ function ConsoleManagement() {
         // Calculate remaining time accurately
         const remainingTime = Math.max(0, Math.floor(endTime.diff(now) / 1000));
         
+        // Recalculate total amount based on session start time and current pricing rules
+        const sessionData = {
+          controllerCount: session.controllerCount || 0,
+          duration: session.duration,
+          addOns: session.addOns || { coldDrinkCount: 0, waterCount: 0, snackCount: 0 }
+        };
+        const correctTotalAmount = calculatePrice(sessionData, startTime.toDate());
+        
         console.log('Session data:', {
           sessionId: session.sessionId || session.id,
           consoleName,
@@ -194,7 +202,8 @@ function ConsoleManagement() {
           duration: session.duration,
           remainingTime,
           playerName: session.playerName,
-          totalAmount: session.totalAmount
+          originalTotalAmount: session.totalAmount,
+          recalculatedTotalAmount: correctTotalAmount
         });
         
         if (remainingTime > 0) {
@@ -207,7 +216,7 @@ function ConsoleManagement() {
             remainingTime,
             duration: session.duration,
             addOns: session.addOns || { coldDrinkCount: 0, waterCount: 0, snackCount: 0 },
-            totalAmount: parseFloat(session.totalAmount) || 0,
+            totalAmount: correctTotalAmount, // Use recalculated amount
             controllerCount: session.controllerCount || 0,
           });
         }
@@ -443,11 +452,21 @@ function ConsoleManagement() {
       const targetConsole = consoles.find(c => c.name === consoleName);
       const apiConsoleId = targetConsole ? targetConsole.id : consoleName;
 
-      // Try to stop the session
+      // Calculate final total amount before ending session
+      const sessionData = {
+        controllerCount: session?.controllerCount || 0,
+        duration: session?.duration || 0,
+        addOns: session?.addOns || { coldDrinkCount: 0, waterCount: 0, snackCount: 0 }
+      };
+      const sessionStartTime = session?.startTime ? moment(session.startTime).toDate() : new Date();
+      const finalTotalAmount = calculatePrice(sessionData, sessionStartTime);
+
+      // Try to stop the session with the correct total amount
       if (session?.sessionId) {
         try {
           await axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/stop`, {
-            sessionId: session.sessionId
+            sessionId: session.sessionId,
+            totalAmount: finalTotalAmount
           }, {
             headers: { Authorization: `Bearer ${token}` }
           });
@@ -455,7 +474,8 @@ function ConsoleManagement() {
           console.error('Error stopping session by sessionId, trying by console:', stopError);
           // Try alternative approaches
           await axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/stop`, {
-            console: apiConsoleId
+            console: apiConsoleId,
+            totalAmount: finalTotalAmount
           }, {
             headers: { Authorization: `Bearer ${token}` }
           });
@@ -529,9 +549,19 @@ function ConsoleManagement() {
       const targetConsole = consoles.find(c => c.name === consoleName || c.id === consoleName);
       const apiConsoleId = targetConsole ? targetConsole.id : consoleName;
 
+      // Calculate new total amount with extended duration
+      const extendedSessionData = {
+        controllerCount: session.controllerCount,
+        duration: session.duration + parseInt(extraMinutes),
+        addOns: session.addOns
+      };
+      const sessionStartTime = moment(session.startTime).toDate();
+      const newTotalAmount = calculatePrice(extendedSessionData, sessionStartTime);
+
       await axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/extend`, {
         console: apiConsoleId,
-        extraMinutes: parseInt(extraMinutes)
+        extraMinutes: parseInt(extraMinutes),
+        totalAmount: newTotalAmount
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -547,6 +577,7 @@ function ConsoleManagement() {
           endTime: newEndTime,
           remainingTime: newRemainingTime,
           duration: session.duration + parseInt(extraMinutes),
+          totalAmount: newTotalAmount,
         });
         return newMap;
       });
@@ -581,14 +612,6 @@ function ConsoleManagement() {
       const targetConsole = consoles.find(c => c.name === consoleName || c.id === consoleName);
       const apiConsoleId = targetConsole ? targetConsole.id : consoleName;
 
-      await axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/add-ons`, {
-        console: apiConsoleId,
-        addOns,
-        controllerCount
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
       // Calculate new total price using the session's start time
       const sessionData = {
         controllerCount,
@@ -597,6 +620,15 @@ function ConsoleManagement() {
       };
       const startTime = moment(session.startTime).toDate();
       const newTotalAmount = calculatePrice(sessionData, startTime);
+
+      await axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/add-ons`, {
+        console: apiConsoleId,
+        addOns,
+        controllerCount,
+        totalAmount: newTotalAmount
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
 
       setActiveSessions((prev) => {
         const newMap = new Map(prev);
@@ -721,7 +753,6 @@ function ConsoleManagement() {
     const numValue = Math.max(0, parseInt(value) || 0);
     setAddOns((prev) => ({ ...prev, [key]: numValue }));
   };
-  
   return (
     <div className="console-management-container">
       <RealTimeClock onTimeUpdate={(time) => {
