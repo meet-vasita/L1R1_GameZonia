@@ -130,19 +130,36 @@ function ConsoleManagement() {
       setConsoles(psConsoles);
 
       const newActiveSessions = new Map();
+      
+      // Process active sessions from API
       sessionsRes.data.forEach((session) => {
-        const targetConsole = psConsoles.find(c => c.id === session.id || c.name === session.id);
-        const consoleName = targetConsole ? targetConsole.name : session.id;
-        const endTime = moment(session.startTime).add(session.duration, 'minutes').valueOf();
-        const remainingTime = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
+        const targetConsole = psConsoles.find(c => c.id === session.console || c.name === session.console || c.id === session.id || c.name === session.id);
+        const consoleName = targetConsole ? targetConsole.name : session.console || session.id;
+        
+        // Parse start time properly
+        const startTime = moment(session.startTime);
+        const endTime = startTime.clone().add(session.duration, 'minutes');
+        const now = moment();
+        const remainingTime = Math.max(0, Math.floor(endTime.diff(now) / 1000));
+        
+        console.log('Session data:', {
+          sessionId: session.sessionId || session.id,
+          consoleName,
+          startTime: startTime.format(),
+          endTime: endTime.format(),
+          duration: session.duration,
+          remainingTime,
+          playerName: session.playerName,
+          totalAmount: session.totalAmount
+        });
         
         if (remainingTime > 0) {
           newActiveSessions.set(consoleName, {
             timerId: null,
-            sessionId: session.sessionId,
-            playerName: session.playerName,
-            startTime: session.startTime,
-            endTime,
+            sessionId: session.sessionId || session.id,
+            playerName: session.playerName || 'Unknown',
+            startTime: startTime.format(),
+            endTime: endTime.valueOf(),
             remainingTime,
             duration: session.duration,
             addOns: session.addOns || { coldDrinkCount: 0, waterCount: 0, snackCount: 0 },
@@ -152,9 +169,28 @@ function ConsoleManagement() {
         }
       });
 
-      setActiveSessions(newActiveSessions);
+      // Merge with existing sessions to preserve local state
+      setActiveSessions(prevSessions => {
+        const mergedSessions = new Map();
+        
+        // First add all API sessions
+        newActiveSessions.forEach((session, consoleName) => {
+          mergedSessions.set(consoleName, session);
+        });
+        
+        // Then add any local sessions that aren't in API response but still have time
+        prevSessions.forEach((session, consoleName) => {
+          if (!mergedSessions.has(consoleName) && session.remainingTime > 0) {
+            mergedSessions.set(consoleName, session);
+          }
+        });
+        
+        return mergedSessions;
+      });
+
       setError(null);
     } catch (err) {
+      console.error('Error fetching consoles:', err);
       const isUnauthorized = err.response?.status === 403;
       setError(isUnauthorized ? 'Unauthorized access. Please log in again.' : 'Failed to fetch consoles.');
       if (isUnauthorized) {
@@ -243,7 +279,7 @@ function ConsoleManagement() {
         return;
       }
 
-      const currentTime = moment().format('YYYY-MM-DD HH:mm:ss');
+      const currentTime = moment();
       const targetConsole = consoles.find(c => c.name === selectedConsole || c.id === selectedConsole);
       const apiConsoleId = targetConsole ? targetConsole.id : selectedConsole;
       const totalPrice = calculatePrice();
@@ -252,11 +288,13 @@ function ConsoleManagement() {
         console: apiConsoleId,
         duration: parseInt(duration),
         addOns,
-        startTime: currentTime,
+        startTime: currentTime.format('YYYY-MM-DD HH:mm:ss'),
         totalPrice,
         playerName,
         controllerCount,
       };
+
+      console.log('Starting session with data:', sessionData);
 
       const [sessionRes] = await Promise.all([
         axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/start`, sessionData, {
@@ -269,14 +307,15 @@ function ConsoleManagement() {
         })
       ]);
 
-      const endTime = moment(currentTime).add(duration, 'minutes').valueOf();
+      const endTime = currentTime.clone().add(duration, 'minutes').valueOf();
 
+      // Update local state immediately
       setActiveSessions((prev) => {
         const newMap = new Map(prev);
         newMap.set(selectedConsole, {
-          sessionId: sessionRes.data.id,
+          sessionId: sessionRes.data.id || sessionRes.data.sessionId,
           playerName,
-          startTime: currentTime,
+          startTime: currentTime.format(),
           endTime,
           remainingTime: duration * 60,
           duration: parseInt(duration),
@@ -288,10 +327,13 @@ function ConsoleManagement() {
         return newMap;
       });
 
-      await fetchConsoles();
       showNotification(`Session started for ${playerName} on ${selectedConsole}`, 'success');
       setShowStartModal(false);
+      
+      // Fetch updated data
+      setTimeout(fetchConsoles, 1000);
     } catch (err) {
+      console.error('Error starting session:', err);
       const isUnauthorized = err.response?.status === 403;
       showNotification(
         isUnauthorized ? 'Unauthorized access. Please log in again.' : 
@@ -334,6 +376,7 @@ function ConsoleManagement() {
             headers: { Authorization: `Bearer ${token}` }
           });
         } catch (stopError) {
+          console.error('Error stopping session by sessionId, trying by console:', stopError);
           // Try alternative approaches
           await axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/stop`, {
             console: apiConsoleId
@@ -358,8 +401,9 @@ function ConsoleManagement() {
       });
 
       showNotification(`Session ended for ${session?.playerName || 'Unknown'} on ${consoleName}`, 'success');
-      await fetchConsoles();
+      setTimeout(fetchConsoles, 1000);
     } catch (err) {
+      console.error('Error ending session:', err);
       // Clean up local state even if API fails
       setActiveSessions((prev) => {
         const newMap = new Map(prev);
@@ -377,7 +421,7 @@ function ConsoleManagement() {
       if (isUnauthorized) {
         handleLogout();
       }
-      await fetchConsoles();
+      setTimeout(fetchConsoles, 1000);
     } finally {
       endingSessionsRef.current.delete(consoleName);
     }
@@ -419,9 +463,10 @@ function ConsoleManagement() {
         return newMap;
       });
 
-      await fetchConsoles();
       showNotification(`Session extended by ${extraMinutes} minutes for ${session.playerName}`, 'success');
+      setTimeout(fetchConsoles, 1000);
     } catch (err) {
+      console.error('Error extending session:', err);
       const isUnauthorized = err.response?.status === 403;
       showNotification(
         isUnauthorized ? 'Unauthorized access. Please log in again.' : 
@@ -501,7 +546,9 @@ function ConsoleManagement() {
 
       showNotification(`Add-ons updated for ${session.playerName}`, 'success');
       setShowAddOnModal(false);
+      setTimeout(fetchConsoles, 1000);
     } catch (err) {
+      console.error('Error updating add-ons:', err);
       const isUnauthorized = err.response?.status === 403;
       showNotification(
         isUnauthorized ? 'Unauthorized access. Please log in again.' : 
@@ -540,6 +587,7 @@ function ConsoleManagement() {
 
         // End session when timer reaches 0
         if (newRemainingTime <= 0 && session.remainingTime > 0) {
+          showNotification(`⏰ Time's up for ${session.playerName} on ${consoleName}!`, 'error');
           setTimeout(() => endSession(consoleName), 100);
           hasChanges = true;
           return;
@@ -675,7 +723,9 @@ function ConsoleManagement() {
                     <p><strong>Player:</strong> {activeSessions.get(console.name)?.playerName || 'Unknown'}</p>
                     <p>
                       <strong>Started:</strong>{' '}
-                      {moment(activeSessions.get(console.name)?.startTime).format('HH:mm:ss')}
+                      {activeSessions.get(console.name)?.startTime ? 
+                        moment(activeSessions.get(console.name).startTime).format('HH:mm:ss') : 
+                        'N/A'}
                     </p>
                     <p>
                       <strong>Controllers:</strong> {activeSessions.get(console.name)?.controllerCount || 0}
