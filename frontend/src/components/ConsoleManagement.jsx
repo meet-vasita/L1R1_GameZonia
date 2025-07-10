@@ -194,18 +194,6 @@ function ConsoleManagement() {
         };
         const correctTotalAmount = calculatePrice(sessionData, startTime.toDate());
         
-        console.log('Session data:', {
-          sessionId: session.sessionId || session.id,
-          consoleName,
-          startTime: startTime.format(),
-          endTime: endTime.format(),
-          duration: session.duration,
-          remainingTime,
-          playerName: session.playerName,
-          originalTotalAmount: session.totalAmount,
-          recalculatedTotalAmount: correctTotalAmount
-        });
-        
         if (remainingTime > 0) {
           newActiveSessions.set(consoleName, {
             timerId: null,
@@ -378,8 +366,6 @@ function ConsoleManagement() {
         playerName,
         controllerCount,
       };
-
-      console.log('Starting session with data:', sessionPayload);
 
       const [sessionRes] = await Promise.all([
         axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/start`, sessionPayload, {
