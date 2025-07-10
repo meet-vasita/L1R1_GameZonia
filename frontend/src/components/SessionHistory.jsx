@@ -15,12 +15,14 @@ function SessionHistory() {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       // Sort sessions by startTime in descending order (newest first)
-      const sortedSessions = res.data.sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
+      const sortedSessions = res.data.sort((a, b) => {
+        const dateA = new Date(a.startTime);
+        const dateB = new Date(b.startTime);
+        return dateB - dateA; // Newest first
+      });
       setSessions(sortedSessions);
     } catch (err) {
-      if (typeof window !== 'undefined' && window.console && typeof window.console.error === 'function') {
-        window.console.error('Error fetching sessions:', err);
-      }
+      console.error('Error fetching sessions:', err);
       setSessions([]);
     }
   }, [date, console, API_BASE_URL]);
@@ -34,9 +36,7 @@ function SessionHistory() {
       alert('Session deleted successfully');
       fetchSessions();
     } catch (err) {
-      if (typeof window !== 'undefined' && window.console && typeof window.console.error === 'function') {
-        window.console.error('Error deleting session:', err);
-      }
+      console.error('Error deleting session:', err);
       alert('Failed to delete session');
     }
   };
