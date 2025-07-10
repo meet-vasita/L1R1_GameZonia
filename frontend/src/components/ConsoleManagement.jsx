@@ -30,92 +30,60 @@ function ConsoleManagement() {
   const endingSessionsRef = useRef(new Set());
 
   useEffect(() => {
-    audioRef.current = new Audio(beepSound);
-    audioRef.current.preload = 'auto';
-    audioRef.current.volume = 0.5;
-
-    audioRef.current.onerror = () => {
-      console.warn('Audio file failed, using Web Audio API fallback');
-      try {
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-
-        oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
-        oscillator.type = 'sine';
-        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
-
-        oscillator.start(audioContext.currentTime);
-        oscillator.stop(audioContext.currentTime + 0.5);
-      } catch (fallbackError) {
-        console.error('Fallback audio failed:', fallbackError);
-      }
-    };
-
-    const savedSessions = JSON.parse(localStorage.getItem('activeSessions') || '{}');
-    if (savedSessions) {
-      const newMap = new Map(Object.entries(savedSessions).map(([name, session]) => [
-        name,
-        {
-          ...session,
-          timerId: null,
-          remainingTime: Math.max(0, Math.floor((moment(session.endTime).diff(moment()) / 1000))),
-        }
-      ]));
-      setActiveSessions(newMap);
-    }
-
+    initializeAudio();
     const token = localStorage.getItem('token');
     if (!token) {
       setError('Please log in to access console management');
       return;
     }
 
-    fetchConsoles();
-    fetchSettings();
+    initializeData();
+    setupIntervals();
 
+    return cleanup;
+  }, []);
+
+  const initializeAudio = () => {
+    audioRef.current = new Audio(beepSound);
+    audioRef.current.preload = 'auto';
+    audioRef.current.volume = 0.5;
+    audioRef.current.onerror = () => {
+      audioRef.current = null; // Fallback will be used
+    };
+  };
+
+  const initializeData = async () => {
+    await Promise.all([fetchConsoles(), fetchSettings()]);
+  };
+
+  const setupIntervals = () => {
     intervalRef.current = setInterval(fetchConsoles, 30000);
     timerRef.current = setInterval(updateTimers, 1000);
+  };
 
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+  const cleanup = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    activeSessions.forEach((session) => {
+      if (session.timerId) {
+        clearTimeout(session.timerId);
       }
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      activeSessions.forEach((session) => {
-        if (session.timerId) {
-          clearTimeout(session.timerId);
-        }
-      });
-      localStorage.setItem('activeSessions', JSON.stringify(Object.fromEntries(activeSessions)));
-    };
-  }, []);
+    });
+  };
 
   const playNotificationSound = () => {
     try {
       if (audioRef.current) {
         audioRef.current.currentTime = 0;
-        const playPromise = audioRef.current.play();
-
-        if (playPromise !== undefined) {
-          playPromise.catch((e) => {
-            console.warn('Audio play failed, using fallback:', e);
-            playFallbackSound();
-          });
-        }
+        audioRef.current.play().catch(() => playFallbackSound());
       } else {
         playFallbackSound();
       }
     } catch (error) {
-      console.error('Sound play error:', error);
       playFallbackSound();
     }
   };
@@ -136,8 +104,8 @@ function ConsoleManagement() {
 
       oscillator.start(audioContext.currentTime);
       oscillator.stop(audioContext.currentTime + 0.5);
-    } catch (fallbackError) {
-      console.error('Fallback audio failed:', fallbackError);
+    } catch (error) {
+      // Silent fallback
     }
   };
 
@@ -167,6 +135,7 @@ function ConsoleManagement() {
         const consoleName = targetConsole ? targetConsole.name : session.id;
         const endTime = moment(session.startTime).add(session.duration, 'minutes').valueOf();
         const remainingTime = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
+        
         if (remainingTime > 0) {
           newActiveSessions.set(consoleName, {
             timerId: null,
@@ -186,26 +155,28 @@ function ConsoleManagement() {
       setActiveSessions(newActiveSessions);
       setError(null);
     } catch (err) {
-      console.error('Fetch consoles error:', err);
-      setError(err.response?.status === 403 ? 'Unauthorized access. Please log in again.' : 'Failed to fetch consoles.');
+      const isUnauthorized = err.response?.status === 403;
+      setError(isUnauthorized ? 'Unauthorized access. Please log in again.' : 'Failed to fetch consoles.');
+      if (isUnauthorized) {
+        handleLogout();
+      }
     }
   };
 
   const fetchSettings = async () => {
     try {
       const token = localStorage.getItem('token');
-      if (!token) {
-        setError('Please log in to access console management');
-        return;
-      }
+      if (!token) return;
+      
       const res = await axios.get(`${process.env.REACT_APP_API_BASE_URL}/api/settings`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setSettings(res.data);
-      setError(null);
     } catch (err) {
-      console.error('Fetch settings error:', err);
-      setError(err.response?.status === 403 ? 'Unauthorized access. Please log in again.' : 'Failed to fetch settings.');
+      const isUnauthorized = err.response?.status === 403;
+      if (isUnauthorized) {
+        handleLogout();
+      }
     }
   };
 
@@ -214,7 +185,7 @@ function ConsoleManagement() {
     const isHappyHour = hour >= 13 && hour < 17;
     const isEvening = hour >= 17 && hour < 24;
     const playerCount = controllerCount + 1;
-    const durationNum = parseInt(duration); // Convert to number
+    const durationNum = parseInt(duration);
     let basePrice;
 
     if (isHappyHour) {
@@ -263,6 +234,7 @@ function ConsoleManagement() {
       showNotification('Player name is required', 'error');
       return;
     }
+    
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
@@ -270,32 +242,32 @@ function ConsoleManagement() {
         setError('Please log in to access console management');
         return;
       }
+
       const currentTime = moment().format('YYYY-MM-DD HH:mm:ss');
       const targetConsole = consoles.find(c => c.name === selectedConsole || c.id === selectedConsole);
       const apiConsoleId = targetConsole ? targetConsole.id : selectedConsole;
+      const totalPrice = calculatePrice();
 
-      const totalPrice = calculatePrice(); // Ensure latest calculation
       const sessionData = {
         console: apiConsoleId,
         duration: parseInt(duration),
         addOns,
         startTime: currentTime,
-        totalPrice, // Use recalculated total
+        totalPrice,
         playerName,
         controllerCount,
       };
 
-      const sessionRes = await axios.post(
-        `${process.env.REACT_APP_API_BASE_URL}/api/sessions/start`,
-        sessionData,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      await axios.post(
-        `${process.env.REACT_APP_API_BASE_URL}/api/consoles/update`,
-        { id: apiConsoleId, status: 'In Use' },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const [sessionRes] = await Promise.all([
+        axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/start`, sessionData, {
+          headers: { Authorization: `Bearer ${token}` }
+        }),
+        axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/consoles/update`, {
+          id: apiConsoleId, status: 'In Use'
+        }, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      ]);
 
       const endTime = moment(currentTime).add(duration, 'minutes').valueOf();
 
@@ -317,53 +289,34 @@ function ConsoleManagement() {
       });
 
       await fetchConsoles();
-      showNotification(`Session started for ${playerName} on ${selectedConsole} at ${currentTime}`, 'success');
+      showNotification(`Session started for ${playerName} on ${selectedConsole}`, 'success');
       setShowStartModal(false);
     } catch (err) {
-      console.error('Start session error:', err);
+      const isUnauthorized = err.response?.status === 403;
       showNotification(
-        err.response?.status === 403 ? 'Unauthorized access. Please log in again.' : `Failed to start session: ${err.response?.data?.error || err.message}`,
+        isUnauthorized ? 'Unauthorized access. Please log in again.' : 
+        `Failed to start session: ${err.response?.data?.error || err.message}`,
         'error'
       );
-      if (err.response?.status === 403) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('activeSessions');
-        window.location.href = '/login';
+      if (isUnauthorized) {
+        handleLogout();
       }
     } finally {
       setLoading(false);
     }
   };
+
   const endSession = async (consoleName) => {
-    console.log(`Ending session for console: ${consoleName}`);
     if (endingSessionsRef.current.has(consoleName)) {
-      console.log(`Session ${consoleName} already being ended`);
       return;
     }
     endingSessionsRef.current.add(consoleName);
 
     try {
       const session = activeSessions.get(consoleName);
-      if (!session) {
-        console.log(`No session found for console: ${consoleName}, forcing console to Free status`);
-
-        // Force console to Free status even if no session found
-        const targetConsole = consoles.find(c => c.name === consoleName);
-        if (targetConsole) {
-          const token = localStorage.getItem('token');
-          try {
-            await axios.post(
-              `${process.env.REACT_APP_API_BASE_URL}/api/consoles/update`,
-              { id: targetConsole.id, status: 'Free' },
-              { headers: { Authorization: `Bearer ${token}` } }
-            );
-            await fetchConsoles();
-          } catch (updateErr) {
-            console.error('Failed to update console status:', updateErr);
-          }
-        }
-
-        endingSessionsRef.current.delete(consoleName);
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setError('Please log in to access console management');
         return;
       }
 
@@ -372,99 +325,64 @@ function ConsoleManagement() {
       const targetConsole = consoles.find(c => c.name === consoleName);
       const apiConsoleId = targetConsole ? targetConsole.id : consoleName;
 
-      console.log('Ending session for console:', consoleName, 'API ID:', apiConsoleId);
-
-      const token = localStorage.getItem('token');
-      if (!token) {
-        setError('Please log in to access console management');
-        endingSessionsRef.current.delete(consoleName);
-        return;
-      }
-
-      // Try different approaches for the stop session API
-      let stopRes;
-      try {
-        // First try with sessionId if available
-        if (session.sessionId) {
-          stopRes = await axios.post(
-            `${process.env.REACT_APP_API_BASE_URL}/api/sessions/stop`,
-            { sessionId: session.sessionId },
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
-        } else {
-          throw new Error('No sessionId available');
-        }
-      } catch (error) {
-        console.log('SessionId approach failed, trying console name:', error.message);
+      // Try to stop the session
+      if (session?.sessionId) {
         try {
-          // Try with console name
-          stopRes = await axios.post(
-            `${process.env.REACT_APP_API_BASE_URL}/api/sessions/stop`,
-            { console: consoleName },
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
-        } catch (error2) {
-          console.log('Console name approach failed, trying console ID:', error2.message);
-          // Try with console ID
-          stopRes = await axios.post(
-            `${process.env.REACT_APP_API_BASE_URL}/api/sessions/stop`,
-            { console: apiConsoleId },
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
+          await axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/stop`, {
+            sessionId: session.sessionId
+          }, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+        } catch (stopError) {
+          // Try alternative approaches
+          await axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/stop`, {
+            console: apiConsoleId
+          }, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
         }
       }
 
-      // Update console status to Free
-      const updateRes = await axios.post(
-        `${process.env.REACT_APP_API_BASE_URL}/api/consoles/update`,
-        { id: apiConsoleId, status: 'Free' },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      // Update console status
+      await axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/consoles/update`, {
+        id: apiConsoleId, status: 'Free'
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
 
-      console.log('Stop session response:', stopRes.data);
-      console.log('Update console response:', updateRes.data);
-
+      // Update local state
       setActiveSessions((prev) => {
         const newMap = new Map(prev);
         newMap.delete(consoleName);
         return newMap;
       });
 
-      showNotification(`Time's up for ${session.playerName} on ${consoleName}!`, 'warning');
+      showNotification(`Session ended for ${session?.playerName || 'Unknown'} on ${consoleName}`, 'success');
       await fetchConsoles();
     } catch (err) {
-      console.error('Error ending session:', err);
-
-      // If all API calls fail, still clean up the local state
+      // Clean up local state even if API fails
       setActiveSessions((prev) => {
         const newMap = new Map(prev);
         newMap.delete(consoleName);
         return newMap;
       });
 
-      // Try to update console status even if stop session failed
-      try {
-        const targetConsole = consoles.find(c => c.name === consoleName);
-        const apiConsoleId = targetConsole ? targetConsole.id : consoleName;
-        await axios.post(
-          `${process.env.REACT_APP_API_BASE_URL}/api/consoles/update`,
-          { id: apiConsoleId, status: 'Free' },
-          { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
-        );
-      } catch (updateErr) {
-        console.error('Failed to update console status:', updateErr);
-      }
-
+      const isUnauthorized = err.response?.status === 403;
       showNotification(
-        err.response?.status === 403 ? 'Unauthorized access. Please log in again.' : `Session ended locally due to API error: ${err.response?.data?.error || err.message}`,
+        isUnauthorized ? 'Unauthorized access. Please log in again.' : 
+        'Session ended locally due to API error',
         'warning'
       );
 
+      if (isUnauthorized) {
+        handleLogout();
+      }
       await fetchConsoles();
     } finally {
       endingSessionsRef.current.delete(consoleName);
     }
   };
+
   const extendSession = async (consoleName, extraMinutes) => {
     const session = activeSessions.get(consoleName);
     if (!session) return;
@@ -475,14 +393,16 @@ function ConsoleManagement() {
         setError('Please log in to access console management');
         return;
       }
+
       const targetConsole = consoles.find(c => c.name === consoleName || c.id === consoleName);
       const apiConsoleId = targetConsole ? targetConsole.id : consoleName;
 
-      await axios.post(
-        `${process.env.REACT_APP_API_BASE_URL}/api/sessions/extend`,
-        { console: apiConsoleId, extraMinutes: parseInt(extraMinutes) },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      await axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/extend`, {
+        console: apiConsoleId,
+        extraMinutes: parseInt(extraMinutes)
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
 
       const newEndTime = moment(session.endTime).add(extraMinutes, 'minutes').valueOf();
       const newRemainingTime = Math.max(0, Math.floor((newEndTime - Date.now()) / 1000));
@@ -495,7 +415,6 @@ function ConsoleManagement() {
           endTime: newEndTime,
           remainingTime: newRemainingTime,
           duration: session.duration + parseInt(extraMinutes),
-          totalAmount: calculatePrice(new Date(newEndTime)),
         });
         return newMap;
       });
@@ -503,15 +422,14 @@ function ConsoleManagement() {
       await fetchConsoles();
       showNotification(`Session extended by ${extraMinutes} minutes for ${session.playerName}`, 'success');
     } catch (err) {
-      console.error('Extend session error:', err);
+      const isUnauthorized = err.response?.status === 403;
       showNotification(
-        err.response?.status === 403 ? 'Unauthorized access. Please log in again.' : `Failed to extend session: ${err.response?.data?.error || err.message}`,
+        isUnauthorized ? 'Unauthorized access. Please log in again.' : 
+        `Failed to extend session: ${err.response?.data?.error || err.message}`,
         'error'
       );
-      if (err.response?.status === 403) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('activeSessions');
-        window.location.href = '/login';
+      if (isUnauthorized) {
+        handleLogout();
       }
     }
   };
@@ -526,16 +444,19 @@ function ConsoleManagement() {
         setError('Please log in to access console management');
         return;
       }
+
       const targetConsole = consoles.find(c => c.name === consoleName || c.id === consoleName);
       const apiConsoleId = targetConsole ? targetConsole.id : consoleName;
 
-      await axios.post(
-        `${process.env.REACT_APP_API_BASE_URL}/api/sessions/add-ons`,
-        { console: apiConsoleId, addOns, controllerCount },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      await axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/add-ons`, {
+        console: apiConsoleId,
+        addOns,
+        controllerCount
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
 
-      // Calculate new total price based on session duration and updated add-ons
+      // Calculate new total price
       const playerCount = controllerCount + 1;
       const sessionDuration = session.duration;
       const currentTime = new Date();
@@ -581,15 +502,14 @@ function ConsoleManagement() {
       showNotification(`Add-ons updated for ${session.playerName}`, 'success');
       setShowAddOnModal(false);
     } catch (err) {
-      console.error('Update add-ons error:', err);
+      const isUnauthorized = err.response?.status === 403;
       showNotification(
-        err.response?.status === 403 ? 'Unauthorized access. Please log in again.' : `Failed to update add-ons: ${err.response?.data?.error || err.message}`,
+        isUnauthorized ? 'Unauthorized access. Please log in again.' : 
+        `Failed to update add-ons: ${err.response?.data?.error || err.message}`,
         'error'
       );
-      if (err.response?.status === 403) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('activeSessions');
-        window.location.href = '/login';
+      if (isUnauthorized) {
+        handleLogout();
       }
     }
   };
@@ -601,7 +521,6 @@ function ConsoleManagement() {
 
       prev.forEach((session, consoleName) => {
         if (endingSessionsRef.current.has(consoleName)) {
-          // Keep the session in the map while it's being ended
           newMap.set(consoleName, session);
           return;
         }
@@ -621,18 +540,15 @@ function ConsoleManagement() {
 
         // End session when timer reaches 0
         if (newRemainingTime <= 0 && session.remainingTime > 0) {
-          console.log(`Timer reached 0 for console ${consoleName}, ending session`);
-          // Don't add to new map, and trigger endSession
           setTimeout(() => endSession(consoleName), 100);
           hasChanges = true;
-          return; // Don't add this session to the new map
+          return;
         }
 
         if (newRemainingTime !== session.remainingTime) {
           hasChanges = true;
         }
 
-        // Add session to new map with updated timer
         newMap.set(consoleName, {
           ...session,
           remainingTime: newRemainingTime,
@@ -692,7 +608,7 @@ function ConsoleManagement() {
     const numValue = Math.max(0, parseInt(value) || 0);
     setAddOns((prev) => ({ ...prev, [key]: numValue }));
   };
-
+  
   return (
     <div className="console-management-container">
       <RealTimeClock onTimeUpdate={(time) => {
