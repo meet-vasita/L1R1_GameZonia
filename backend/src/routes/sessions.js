@@ -2,12 +2,15 @@ const express = require('express');
 const fs = require('fs');
 const csv = require('csv-parser');
 const { format } = require('fast-csv');
-const moment = require('moment');
+const moment = require('moment-timezone');
 const router = express.Router();
 
 const SESSIONS_FILE = './data/sessions.csv';
 const SETTINGS_FILE = './data/settings.csv';
 const ACTIVE_ADMINS_FILE = './data/active_admins.csv'; // New file to track active admins
+
+// Set default timezone to India
+const TIMEZONE = 'Asia/Kolkata';
 
 const getSettings = async () => {
   const settings = {};
@@ -62,8 +65,8 @@ const writeActiveAdmins = (admins) => {
 const findActiveSession = (sessions, consoleName) => {
   return sessions.find((session) => {
     if (session.console !== consoleName) return false;
-    const now = moment();
-    const endTime = moment(session.endTime);
+    const now = moment().tz(TIMEZONE);
+    const endTime = moment(session.endTime).tz(TIMEZONE);
     return endTime.isAfter(now);
   });
 };
@@ -94,10 +97,10 @@ const readAllSessions = () => {
 };
 
 router.post('/start', async (req, res) => {
-  // Inside router.post('/start', async (req, res) => { ... })
   try {
     const { console: consoleName, duration, addOns, totalPrice, playerName, controllerCount = 0 } = req.body;
     global.console.log('Received start request:', { consoleName, duration, addOns, totalPrice, playerName, controllerCount });
+    
     if (!consoleName || !duration || !playerName) {
       return res.status(400).json({ error: 'Console name, duration, and player name are required' });
     }
@@ -110,16 +113,17 @@ router.post('/start', async (req, res) => {
       return res.status(400).json({ error: 'Console already has an active session' });
     }
 
-    const currentTime = moment();
+    const currentTime = moment().tz(TIMEZONE);
     const hour = currentTime.hour();
     const isHappyHour = hour >= 13 && hour < 17;
     const isEvening = hour >= 17 && hour < 24;
     const playerCount = parseInt(controllerCount) + 1;
     global.console.log('Calculated playerCount:', playerCount);
+    
     let baseCost;
     if (isHappyHour) {
       if (playerCount === 2) {
-        baseCost = duration === 30 ? 40 : 60; // Special rate for 2 players
+        baseCost = 40; // Fixed flat rate for 2 players during happy hour
       } else {
         baseCost = playerCount * (duration === 30 ? 20 : duration === 60 ? 30 : (duration / 60) * 30);
       }
@@ -160,7 +164,7 @@ router.post('/start', async (req, res) => {
       console: consoleName,
       playerName: playerName || 'Unknown',
       startTime: currentTime.format('YYYY-MM-DD HH:mm:ss'),
-      endTime: currentTime.add(duration, 'minutes').format('YYYY-MM-DD HH:mm:ss'),
+      endTime: currentTime.clone().add(duration, 'minutes').format('YYYY-MM-DD HH:mm:ss'),
       duration: parseInt(duration),
       baseCost: baseCost.toFixed(2),
       addOns: JSON.stringify(addOns || {}),
@@ -199,18 +203,19 @@ router.post('/extend', async (req, res) => {
       return res.status(404).json({ error: 'Session not found' });
     }
 
-    const currentTime = moment();
+    const currentTime = moment().tz(TIMEZONE);
     const hour = currentTime.hour();
     const isHappyHour = hour >= 13 && hour < 17;
     const isEvening = hour >= 17 && hour < 24;
     const playerCount = parseInt(activeSession.controllerCount) + 1;
     const updatedDuration = parseInt(activeSession.duration) + parseInt(extraMinutes);
+    
     let newBaseCost;
     if (isHappyHour) {
       if (playerCount === 2) {
-        newBaseCost = 40; // Flat ₹40 for 2 players
+        newBaseCost = 40; // Fixed flat rate for 2 players during happy hour
       } else {
-        newBaseCost = (updatedDuration === 30 ? 20 : updatedDuration === 60 ? 30 : (updatedDuration / 60) * 30);
+        newBaseCost = playerCount * (updatedDuration === 30 ? 20 : updatedDuration === 60 ? 30 : (updatedDuration / 60) * 30);
       }
     } else if (isEvening) {
       if (playerCount === 1) {
@@ -237,7 +242,7 @@ router.post('/extend', async (req, res) => {
     sessions[sessionIndex] = {
       ...activeSession,
       duration: updatedDuration,
-      endTime: moment(activeSession.startTime).add(updatedDuration, 'minutes').format('YYYY-MM-DD HH:mm:ss'),
+      endTime: moment(activeSession.startTime).tz(TIMEZONE).add(updatedDuration, 'minutes').format('YYYY-MM-DD HH:mm:ss'),
       baseCost: newBaseCost.toFixed(2),
       totalAmount: newTotalAmount.toFixed(2),
     };
@@ -272,8 +277,8 @@ router.post('/stop', async (req, res) => {
       return res.status(404).json({ error: 'Session not found' });
     }
 
-    const now = moment();
-    const startTime = moment(activeSession.startTime);
+    const now = moment().tz(TIMEZONE);
+    const startTime = moment(activeSession.startTime).tz(TIMEZONE);
     const actualDuration = now.diff(startTime, 'minutes');
     const playerCount = parseInt(activeSession.controllerCount) + 1;
     let finalBaseCost;
@@ -282,9 +287,9 @@ router.post('/stop', async (req, res) => {
     const isEvening = hour >= 17 && hour < 24;
     if (isHappyHour) {
       if (playerCount === 2) {
-        finalBaseCost = 40;
+        finalBaseCost = 40; // Fixed flat rate for 2 players during happy hour
       } else {
-        finalBaseCost = (actualDuration === 30 ? 20 : actualDuration === 60 ? 30 : (actualDuration / 60) * 30);
+        finalBaseCost = playerCount * (actualDuration === 30 ? 20 : actualDuration === 60 ? 30 : (actualDuration / 60) * 30);
       }
     } else if (isEvening) {
       if (playerCount === 1) {
@@ -352,21 +357,22 @@ router.post('/add-ons', async (req, res) => {
       snackCount: parseInt(addOns.snackCount) || 0,
     };
 
-    const currentTime = moment();
+    const currentTime = moment().tz(TIMEZONE);
     const hour = currentTime.hour();
     const isHappyHour = hour >= 13 && hour < 17;
     const isEvening = hour >= 17 && hour < 24;
     const playerCount = controllerCount !== undefined ? controllerCount + 1 : parseInt(activeSession.controllerCount) + 1;
     let baseCost = parseFloat(activeSession.baseCost); // Use existing baseCost unless controllerCount changes
+    
     // Fixed section in the /add-ons endpoint
     if (controllerCount !== undefined) { // Recalculate only if controller count changes
       const duration = parseInt(activeSession.duration);
       global.console.log('Add-ons Debug - Duration:', activeSession.duration, 'Parsed Duration:', duration);
       if (isHappyHour) {
         if (playerCount === 2) {
-          baseCost = 40;
+          baseCost = 40; // Fixed flat rate for 2 players during happy hour
         } else {
-          baseCost = (duration === 30 ? 20 : duration === 60 ? 30 : (duration / 60) * 30);
+          baseCost = playerCount * (duration === 30 ? 20 : duration === 60 ? 30 : (duration / 60) * 30);
         }
       } else if (isEvening) {
         if (playerCount === 1) {
@@ -394,6 +400,7 @@ router.post('/add-ons', async (req, res) => {
       addOns: JSON.stringify(sanitizedAddOns),
       totalAmount: newTotalAmount.toFixed(2),
       controllerCount: controllerCount !== undefined ? controllerCount : activeSession.controllerCount,
+      baseCost: baseCost.toFixed(2), // Update baseCost in case it changed
     };
 
     await writeSessionsToCSV(sessions);
@@ -543,13 +550,13 @@ router.get('/monthly', async (req, res) => {
 
 router.get('/active', async (req, res) => {
   try {
-    global.console.log('Fetching active sessions at:', moment().format('HH:mm:ss'));
+    const now = moment().tz(TIMEZONE);
+    global.console.log('Fetching active sessions at:', now.format('HH:mm:ss'));
     const sessions = await readAllSessions();
-    const now = moment();
 
     const activeSessions = sessions
       .filter((row) => {
-        const endTime = moment(row.endTime);
+        const endTime = moment(row.endTime).tz(TIMEZONE);
         return endTime.isAfter(now);
       })
       .map((row) => ({
@@ -558,7 +565,7 @@ router.get('/active', async (req, res) => {
         playerName: row.playerName,
         startTime: row.startTime,
         duration: parseInt(row.duration),
-        remainingTime: Math.max(0, moment(row.endTime).diff(now, 'seconds')),
+        remainingTime: Math.max(0, moment(row.endTime).tz(TIMEZONE).diff(now, 'seconds')),
         addOns: JSON.parse(row.addOns || '{}'),
         totalAmount: row.totalAmount,
         controllerCount: parseInt(row.controllerCount) || 0,
