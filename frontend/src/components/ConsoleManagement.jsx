@@ -37,11 +37,53 @@ function ConsoleManagement() {
       return;
     }
 
+    // Load persisted sessions on component mount
+    loadPersistedSessions();
+    
     initializeData();
     setupIntervals();
 
     return cleanup;
   }, []);
+
+  // Save sessions to localStorage whenever activeSessions changes
+  useEffect(() => {
+    if (activeSessions.size > 0) {
+      const sessionsArray = Array.from(activeSessions.entries()).map(([key, value]) => [key, value]);
+      localStorage.setItem('activeSessions', JSON.stringify(sessionsArray));
+    }
+  }, [activeSessions]);
+
+  const loadPersistedSessions = () => {
+    try {
+      const savedSessions = localStorage.getItem('activeSessions');
+      if (savedSessions) {
+        const sessionsArray = JSON.parse(savedSessions);
+        const sessionsMap = new Map(sessionsArray);
+        
+        // Recalculate remaining time for persisted sessions
+        const now = moment();
+        const updatedSessions = new Map();
+        
+        sessionsMap.forEach((session, consoleName) => {
+          const endTime = moment(session.endTime);
+          const remainingTime = Math.max(0, Math.floor(endTime.diff(now) / 1000));
+          
+          if (remainingTime > 0) {
+            updatedSessions.set(consoleName, {
+              ...session,
+              remainingTime,
+              timerId: null
+            });
+          }
+        });
+        
+        setActiveSessions(updatedSessions);
+      }
+    } catch (error) {
+      console.error('Error loading persisted sessions:', error);
+    }
+  };
 
   const initializeAudio = () => {
     audioRef.current = new Audio(beepSound);
@@ -130,16 +172,18 @@ function ConsoleManagement() {
       setConsoles(psConsoles);
 
       const newActiveSessions = new Map();
+      const now = moment();
       
       // Process active sessions from API
       sessionsRes.data.forEach((session) => {
         const targetConsole = psConsoles.find(c => c.id === session.console || c.name === session.console || c.id === session.id || c.name === session.id);
         const consoleName = targetConsole ? targetConsole.name : session.console || session.id;
         
-        // Parse start time properly
+        // Parse start time and calculate end time properly
         const startTime = moment(session.startTime);
         const endTime = startTime.clone().add(session.duration, 'minutes');
-        const now = moment();
+        
+        // Calculate remaining time accurately
         const remainingTime = Math.max(0, Math.floor(endTime.diff(now) / 1000));
         
         console.log('Session data:', {
@@ -169,19 +213,40 @@ function ConsoleManagement() {
         }
       });
 
-      // Merge with existing sessions to preserve local state
+      // Merge with existing local sessions, prioritizing API data but keeping local state for active timers
       setActiveSessions(prevSessions => {
         const mergedSessions = new Map();
         
-        // First add all API sessions
-        newActiveSessions.forEach((session, consoleName) => {
-          mergedSessions.set(consoleName, session);
+        // First add all API sessions (these are the source of truth)
+        newActiveSessions.forEach((apiSession, consoleName) => {
+          const localSession = prevSessions.get(consoleName);
+          
+          // If we have a local session, preserve the timer state but update other data
+          if (localSession && localSession.sessionId === apiSession.sessionId) {
+            mergedSessions.set(consoleName, {
+              ...apiSession,
+              // Keep the local remaining time if it's more accurate (for active timers)
+              remainingTime: localSession.remainingTime > 0 ? localSession.remainingTime : apiSession.remainingTime,
+              timerId: localSession.timerId
+            });
+          } else {
+            mergedSessions.set(consoleName, apiSession);
+          }
         });
         
-        // Then add any local sessions that aren't in API response but still have time
-        prevSessions.forEach((session, consoleName) => {
-          if (!mergedSessions.has(consoleName) && session.remainingTime > 0) {
-            mergedSessions.set(consoleName, session);
+        // Add any local sessions that aren't in API response but still have time
+        prevSessions.forEach((localSession, consoleName) => {
+          if (!mergedSessions.has(consoleName) && localSession.remainingTime > 0) {
+            // Verify this session is still valid by checking if enough time has passed
+            const timeSinceStart = moment().diff(moment(localSession.startTime), 'seconds');
+            const expectedRemainingTime = Math.max(0, (localSession.duration * 60) - timeSinceStart);
+            
+            if (expectedRemainingTime > 0) {
+              mergedSessions.set(consoleName, {
+                ...localSession,
+                remainingTime: expectedRemainingTime
+              });
+            }
           }
         });
         
@@ -216,12 +281,16 @@ function ConsoleManagement() {
     }
   };
 
-  const calculatePrice = (currentTime = new Date()) => {
+  const calculatePrice = (sessionData = null, currentTime = new Date()) => {
     const hour = currentTime.getHours();
     const isHappyHour = hour >= 13 && hour < 17;
     const isEvening = hour >= 17 && hour < 24;
-    const playerCount = controllerCount + 1;
-    const durationNum = parseInt(duration);
+    
+    // Use session data if provided, otherwise use current form data
+    const playerCount = (sessionData ? sessionData.controllerCount : controllerCount) + 1;
+    const durationNum = sessionData ? sessionData.duration : parseInt(duration);
+    const sessionAddOns = sessionData ? sessionData.addOns : addOns;
+    
     let basePrice;
 
     if (isHappyHour) {
@@ -242,9 +311,9 @@ function ConsoleManagement() {
       basePrice = playerCount * (durationNum === 30 ? 20 : durationNum === 60 ? 30 : (durationNum / 60) * 30);
     }
 
-    const coldDrinkPrice = addOns.coldDrinkCount * parseInt(settings.coldDrinkPrice || 15);
-    const waterPrice = addOns.waterCount * parseInt(settings.waterPrice || 10);
-    const snackPrice = addOns.snackCount * parseInt(settings.snackPrice || 5);
+    const coldDrinkPrice = sessionAddOns.coldDrinkCount * parseInt(settings.coldDrinkPrice || 15);
+    const waterPrice = sessionAddOns.waterCount * parseInt(settings.waterPrice || 10);
+    const snackPrice = sessionAddOns.snackCount * parseInt(settings.snackPrice || 5);
     return Math.max(0, basePrice + coldDrinkPrice + waterPrice + snackPrice);
   };
 
@@ -282,9 +351,16 @@ function ConsoleManagement() {
       const currentTime = moment();
       const targetConsole = consoles.find(c => c.name === selectedConsole || c.id === selectedConsole);
       const apiConsoleId = targetConsole ? targetConsole.id : selectedConsole;
-      const totalPrice = calculatePrice();
-
+      
+      // Calculate price at session start time
       const sessionData = {
+        controllerCount,
+        duration: parseInt(duration),
+        addOns
+      };
+      const totalPrice = calculatePrice(sessionData, currentTime.toDate());
+
+      const sessionPayload = {
         console: apiConsoleId,
         duration: parseInt(duration),
         addOns,
@@ -294,10 +370,10 @@ function ConsoleManagement() {
         controllerCount,
       };
 
-      console.log('Starting session with data:', sessionData);
+      console.log('Starting session with data:', sessionPayload);
 
       const [sessionRes] = await Promise.all([
-        axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/start`, sessionData, {
+        axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/start`, sessionPayload, {
           headers: { Authorization: `Bearer ${token}` }
         }),
         axios.post(`${process.env.REACT_APP_API_BASE_URL}/api/consoles/update`, {
@@ -400,6 +476,18 @@ function ConsoleManagement() {
         return newMap;
       });
 
+      // Clear from localStorage
+      const savedSessions = localStorage.getItem('activeSessions');
+      if (savedSessions) {
+        try {
+          const sessionsArray = JSON.parse(savedSessions);
+          const filteredSessions = sessionsArray.filter(([key]) => key !== consoleName);
+          localStorage.setItem('activeSessions', JSON.stringify(filteredSessions));
+        } catch (error) {
+          console.error('Error updating localStorage:', error);
+        }
+      }
+
       showNotification(`Session ended for ${session?.playerName || 'Unknown'} on ${consoleName}`, 'success');
       setTimeout(fetchConsoles, 1000);
     } catch (err) {
@@ -501,37 +589,14 @@ function ConsoleManagement() {
         headers: { Authorization: `Bearer ${token}` }
       });
 
-      // Calculate new total price
-      const playerCount = controllerCount + 1;
-      const sessionDuration = session.duration;
-      const currentTime = new Date();
-      const hour = currentTime.getHours();
-      const isHappyHour = hour >= 13 && hour < 17;
-      const isEvening = hour >= 17 && hour < 24;
-
-      let basePrice;
-      if (isHappyHour) {
-        if (playerCount === 2) {
-          basePrice = sessionDuration === 30 ? 40 : sessionDuration === 60 ? 40 : (sessionDuration / 60) * 40;
-        } else {
-          basePrice = playerCount * (sessionDuration === 30 ? 20 : sessionDuration === 60 ? 30 : (sessionDuration / 60) * 30);
-        }
-      } else if (isEvening) {
-        if (playerCount === 1) {
-          basePrice = sessionDuration === 30 ? 20 : sessionDuration === 60 ? 30 : (sessionDuration / 60) * 30;
-        } else if (playerCount === 2) {
-          basePrice = sessionDuration === 30 ? 40 : sessionDuration === 60 ? 60 : (sessionDuration / 30) * 40;
-        } else {
-          basePrice = playerCount * (sessionDuration === 30 ? 20 : sessionDuration === 60 ? 30 : (sessionDuration / 60) * 30);
-        }
-      } else {
-        basePrice = playerCount * (sessionDuration === 30 ? 20 : sessionDuration === 60 ? 30 : (sessionDuration / 60) * 30);
-      }
-
-      const coldDrinkPrice = addOns.coldDrinkCount * parseInt(settings.coldDrinkPrice || 15);
-      const waterPrice = addOns.waterCount * parseInt(settings.waterPrice || 10);
-      const snackPrice = addOns.snackCount * parseInt(settings.snackPrice || 5);
-      const newTotalAmount = Math.max(0, basePrice + coldDrinkPrice + waterPrice + snackPrice);
+      // Calculate new total price using the session's start time
+      const sessionData = {
+        controllerCount,
+        duration: session.duration,
+        addOns
+      };
+      const startTime = moment(session.startTime).toDate();
+      const newTotalAmount = calculatePrice(sessionData, startTime);
 
       setActiveSessions((prev) => {
         const newMap = new Map(prev);
@@ -660,12 +725,28 @@ function ConsoleManagement() {
   return (
     <div className="console-management-container">
       <RealTimeClock onTimeUpdate={(time) => {
+        // Update total amounts for all active sessions based on current time
         setActiveSessions((prev) => {
           const newMap = new Map(prev);
+          let hasChanges = false;
+          
           prev.forEach((session, consoleName) => {
-            newMap.set(consoleName, { ...session, totalAmount: calculatePrice(time) });
+            // Use the session's start time for pricing calculation
+            const startTime = moment(session.startTime).toDate();
+            const sessionData = {
+              controllerCount: session.controllerCount,
+              duration: session.duration,
+              addOns: session.addOns
+            };
+            const newTotalAmount = calculatePrice(sessionData, startTime);
+            
+            if (newTotalAmount !== session.totalAmount) {
+              hasChanges = true;
+              newMap.set(consoleName, { ...session, totalAmount: newTotalAmount });
+            }
           });
-          return newMap;
+          
+          return hasChanges ? newMap : prev;
         });
       }} />
       <h1>Console Management</h1>
@@ -914,5 +995,4 @@ function ConsoleManagement() {
     </div>
   );
 }
-
 export default ConsoleManagement;
