@@ -1,0 +1,275 @@
+.login-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e7eb 100%);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  padding: 1.5rem;
+  transition: background 0.3s ease;
+}
+
+.login-card {
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+  padding: 2.5rem;
+  width: 100%;
+  max-width: 400px;
+  text-align: center;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.login-card:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
+}
+
+.login-card h2 {
+  margin: 0 0 2rem;
+  font-size: 2rem;
+  font-weight: 800;
+  color: #1e3c72;
+  letter-spacing: -0.025em;
+}
+
+.login-card input {
+  width: 100%;
+  padding: 0.875rem;
+  margin: 0.75rem 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f7fafc;
+  font-size: 1rem;
+  color: #2d3748;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.login-card input:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15);
+}
+
+.login-card input::placeholder {
+  color: #a0aec0;
+  font-weight: 500;
+}
+
+.login-card button {
+  width: 100%;
+  padding: 0.875rem;
+  margin: 0.75rem 0;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(45deg, #6366f1, #4f46e5);
+  color: white;
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.login-card button:hover {
+  background: linear-gradient(45deg, #4f46e5, #4338ca);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+}
+
+.login-card button:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.login-card button:last-of-type {
+  background: linear-gradient(45deg, #28a745, #218838);
+  margin-top: 1.5rem;
+}
+
+.login-card button:last-of-type:hover {
+  background: linear-gradient(45deg, #218838, #1e7e34);
+  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
+}
+
+.admin-info {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  text-align: center;
+}
+
+.admin-info p {
+  margin: 0.5rem 0;
+  font-size: 0.95rem;
+  color: #2d3748;
+  font-weight: 600;
+}
+
+.warning-message {
+  color: #c53030;
+  font-weight: 700;
+  background: linear-gradient(135deg, #fef2f2 0%, #fef5e7 100%);
+  padding: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid #fbb6ce;
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+  animation: pulse 2s infinite;
+}
+
+.disabled-button {
+  opacity: 0.5 !important;
+  cursor: not-allowed !important;
+  background: linear-gradient(45deg, #cbd5e0, #a0aec0) !important;
+  pointer-events: none;
+}
+
+.disabled-button:hover {
+  background: linear-gradient(45deg, #cbd5e0, #a0aec0) !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.add-admin-section {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f7fafc;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  animation: slideIn 0.3s ease-out;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.add-admin-section h3 {
+  margin: 0 0 1.5rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #2d3748;
+}
+
+.add-admin-section input {
+  width: 100%;
+  padding: 0.875rem;
+  margin: 0.75rem 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 1rem;
+  color: #2d3748;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.add-admin-section input:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15);
+}
+
+.add-admin-section button {
+  width: 100%;
+  padding: 0.875rem;
+  margin: 0.75rem 0;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(45deg, #28a745, #218838);
+  color: white;
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.add-admin-section button:hover {
+  background: linear-gradient(45deg, #218838, #1e7e34);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
+}
+
+.add-admin-section button:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+.error-message {
+  color: #c53030;
+  margin: 0.75rem 0;
+  font-weight: 600;
+  text-align: left;
+  padding: 0.5rem;
+  background: #fef2f2;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+@media (max-width: 480px) {
+  .login-container {
+    padding: 1rem;
+  }
+
+  .login-card {
+    padding: 1.5rem;
+    max-width: 90%;
+  }
+
+  .login-card h2 {
+    font-size: 1.5rem;
+  }
+
+  .login-card input,
+  .login-card button {
+    padding: 0.75rem;
+    font-size: 0.95rem;
+  }
+
+  .admin-info {
+    padding: 0.75rem;
+    margin: 1rem 0;
+  }
+
+  .admin-info p {
+    font-size: 0.85rem;
+  }
+
+  .warning-message {
+    padding: 0.5rem;
+    font-size: 0.8rem;
+  }
+
+  .add-admin-section {
+    padding: 1rem;
+    margin-top: 1.5rem;
+  }
+
+  .add-admin-section h3 {
+    font-size: 1.25rem;
+  }
+
+  .add-admin-section input,
+  .add-admin-section button {
+    padding: 0.75rem;
+    font-size: 0.95rem;
+  }
+}

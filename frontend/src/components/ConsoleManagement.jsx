@@ -1,0 +1,952 @@
+import React, { useState, useEffect, useRef } from 'react';
+import axios from 'axios';
+import moment from 'moment';
+import RealTimeClock from './RealTimeClock';
+import '../styles/ConsoleManagement.css';
+import beepSound from './beep.mp3'
+
+function ConsoleManagement() {
+  const [consoles, setConsoles] = useState([]);
+  const [settings, setSettings] = useState({
+    pricePerHour: 60,
+    coldDrinkPrice: 15,
+    waterPrice: 10,
+    snackPrice: 5,
+    consoles: 'PS2 #1,PS2 #2',
+  });
+  const [duration, setDuration] = useState(30);
+  const [controllerCount, setControllerCount] = useState(0);
+  const [addOns, setAddOns] = useState({ coldDrinkCount: 0, waterCount: 0, snackCount: 0 });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [activeSessions, setActiveSessions] = useState(new Map());
+  const [showStartModal, setShowStartModal] = useState(false);
+  const [showAddOnModal, setShowAddOnModal] = useState(false);
+  const [selectedConsole, setSelectedConsole] = useState(null);
+  const [playerName, setPlayerName] = useState('');
+  const intervalRef = useRef(null);
+  const timerRef = useRef(null);
+  const audioRef = useRef(null);
+  const endingSessionsRef = useRef(new Set());
+
+  useEffect(() => {
+    audioRef.current = new Audio(beepSound);
+    audioRef.current.preload = 'auto';
+    audioRef.current.volume = 0.5;
+
+    audioRef.current.onerror = () => {
+      console.warn('Audio file failed, using Web Audio API fallback');
+      try {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+        oscillator.type = 'sine';
+        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 0.5);
+      } catch (fallbackError) {
+        console.error('Fallback audio failed:', fallbackError);
+      }
+    };
+
+    const savedSessions = JSON.parse(localStorage.getItem('activeSessions') || '{}');
+    if (savedSessions) {
+      const newMap = new Map(Object.entries(savedSessions).map(([name, session]) => [
+        name,
+        {
+          ...session,
+          timerId: null,
+          remainingTime: Math.max(0, Math.floor((moment(session.endTime).diff(moment()) / 1000))),
+        }
+      ]));
+      setActiveSessions(newMap);
+    }
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setError('Please log in to access console management');
+      return;
+    }
+
+    fetchConsoles();
+    fetchSettings();
+
+    intervalRef.current = setInterval(fetchConsoles, 30000);
+    timerRef.current = setInterval(updateTimers, 1000);
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      activeSessions.forEach((session) => {
+        if (session.timerId) {
+          clearTimeout(session.timerId);
+        }
+      });
+      localStorage.setItem('activeSessions', JSON.stringify(Object.fromEntries(activeSessions)));
+    };
+  }, []);
+
+  const playNotificationSound = () => {
+    try {
+      if (audioRef.current) {
+        audioRef.current.currentTime = 0;
+        const playPromise = audioRef.current.play();
+
+        if (playPromise !== undefined) {
+          playPromise.catch((e) => {
+            console.warn('Audio play failed, using fallback:', e);
+            playFallbackSound();
+          });
+        }
+      } else {
+        playFallbackSound();
+      }
+    } catch (error) {
+      console.error('Sound play error:', error);
+      playFallbackSound();
+    }
+  };
+
+  const playFallbackSound = () => {
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+      oscillator.type = 'sine';
+      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 0.5);
+    } catch (fallbackError) {
+      console.error('Fallback audio failed:', fallbackError);
+    }
+  };
+
+  const fetchConsoles = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setError('Please log in to access console management');
+        return;
+      }
+
+      const [consolesRes, sessionsRes] = await Promise.all([
+        axios.get(`${process.env.REACT_APP_API_BASE_URL}/api/consoles`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        axios.get(`${process.env.REACT_APP_API_BASE_URL}/api/sessions/active`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ]);
+
+      const psConsoles = consolesRes.data.filter((console) => console.name.includes('PS2'));
+      setConsoles(psConsoles);
+
+      const newActiveSessions = new Map();
+      sessionsRes.data.forEach((session) => {
+        const targetConsole = psConsoles.find(c => c.id === session.id || c.name === session.id);
+        const consoleName = targetConsole ? targetConsole.name : session.id;
+        const endTime = moment(session.startTime).add(session.duration, 'minutes').valueOf();
+        const remainingTime = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
+        if (remainingTime > 0) {
+          newActiveSessions.set(consoleName, {
+            timerId: null,
+            sessionId: session.sessionId,
+            playerName: session.playerName,
+            startTime: session.startTime,
+            endTime,
+            remainingTime,
+            duration: session.duration,
+            addOns: session.addOns || { coldDrinkCount: 0, waterCount: 0, snackCount: 0 },
+            totalAmount: parseFloat(session.totalAmount) || 0,
+            controllerCount: session.controllerCount || 0,
+          });
+        }
+      });
+
+      setActiveSessions(newActiveSessions);
+      setError(null);
+    } catch (err) {
+      console.error('Fetch consoles error:', err);
+      setError(err.response?.status === 403 ? 'Unauthorized access. Please log in again.' : 'Failed to fetch consoles.');
+    }
+  };
+
+  const fetchSettings = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setError('Please log in to access console management');
+        return;
+      }
+      const res = await axios.get(`${process.env.REACT_APP_API_BASE_URL}/api/settings`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setSettings(res.data);
+      setError(null);
+    } catch (err) {
+      console.error('Fetch settings error:', err);
+      setError(err.response?.status === 403 ? 'Unauthorized access. Please log in again.' : 'Failed to fetch settings.');
+    }
+  };
+
+  const calculatePrice = (currentTime = new Date()) => {
+    const hour = currentTime.getHours();
+    const isHappyHour = hour >= 13 && hour < 17;
+    const isEvening = hour >= 17 && hour < 24;
+    const playerCount = controllerCount + 1;
+    const durationNum = parseInt(duration); // Convert to number
+    let basePrice;
+
+    if (isHappyHour) {
+      if (playerCount === 2) {
+        basePrice = durationNum === 30 ? 40 : durationNum === 60 ? 40 : (durationNum / 60) * 40;
+      } else {
+        basePrice = playerCount * (durationNum === 30 ? 20 : durationNum === 60 ? 30 : (durationNum / 60) * 30);
+      }
+    } else if (isEvening) {
+      if (playerCount === 1) {
+        basePrice = durationNum === 30 ? 20 : durationNum === 60 ? 30 : (durationNum / 60) * 30;
+      } else if (playerCount === 2) {
+        basePrice = durationNum === 30 ? 40 : durationNum === 60 ? 60 : (durationNum / 30) * 40;
+      } else {
+        basePrice = playerCount * (durationNum === 30 ? 20 : durationNum === 60 ? 30 : (durationNum / 60) * 30);
+      }
+    } else {
+      basePrice = playerCount * (durationNum === 30 ? 20 : durationNum === 60 ? 30 : (durationNum / 60) * 30);
+    }
+
+    const coldDrinkPrice = addOns.coldDrinkCount * parseInt(settings.coldDrinkPrice || 15);
+    const waterPrice = addOns.waterCount * parseInt(settings.waterPrice || 10);
+    const snackPrice = addOns.snackCount * parseInt(settings.snackPrice || 5);
+    return Math.max(0, basePrice + coldDrinkPrice + waterPrice + snackPrice);
+  };
+
+  const openStartModal = (consoleName) => {
+    setSelectedConsole(consoleName);
+    setPlayerName('');
+    setControllerCount(0);
+    setAddOns({ coldDrinkCount: 0, waterCount: 0, snackCount: 0 });
+    setDuration(30);
+    setShowStartModal(true);
+  };
+
+  const openAddOnModal = (consoleName) => {
+    setSelectedConsole(consoleName);
+    const session = activeSessions.get(consoleName);
+    setAddOns(session ? { ...session.addOns } : { coldDrinkCount: 0, waterCount: 0, snackCount: 0 });
+    setControllerCount(session ? session.controllerCount : 0);
+    setShowAddOnModal(true);
+  };
+
+  const startSession = async () => {
+    if (!playerName.trim()) {
+      showNotification('Player name is required', 'error');
+      return;
+    }
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setError('Please log in to access console management');
+        return;
+      }
+      const currentTime = moment().format('YYYY-MM-DD HH:mm:ss');
+      const targetConsole = consoles.find(c => c.name === selectedConsole || c.id === selectedConsole);
+      const apiConsoleId = targetConsole ? targetConsole.id : selectedConsole;
+
+      const totalPrice = calculatePrice(); // Ensure latest calculation
+      const sessionData = {
+        console: apiConsoleId,
+        duration: parseInt(duration),
+        addOns,
+        startTime: currentTime,
+        totalPrice, // Use recalculated total
+        playerName,
+        controllerCount,
+      };
+
+      const sessionRes = await axios.post(
+        `${process.env.REACT_APP_API_BASE_URL}/api/sessions/start`,
+        sessionData,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      await axios.post(
+        `${process.env.REACT_APP_API_BASE_URL}/api/consoles/update`,
+        { id: apiConsoleId, status: 'In Use' },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      const endTime = moment(currentTime).add(duration, 'minutes').valueOf();
+
+      setActiveSessions((prev) => {
+        const newMap = new Map(prev);
+        newMap.set(selectedConsole, {
+          sessionId: sessionRes.data.id,
+          playerName,
+          startTime: currentTime,
+          endTime,
+          remainingTime: duration * 60,
+          duration: parseInt(duration),
+          addOns: { ...addOns },
+          totalAmount: totalPrice,
+          controllerCount,
+          timerId: null,
+        });
+        return newMap;
+      });
+
+      await fetchConsoles();
+      showNotification(`Session started for ${playerName} on ${selectedConsole} at ${currentTime}`, 'success');
+      setShowStartModal(false);
+    } catch (err) {
+      console.error('Start session error:', err);
+      showNotification(
+        err.response?.status === 403 ? 'Unauthorized access. Please log in again.' : `Failed to start session: ${err.response?.data?.error || err.message}`,
+        'error'
+      );
+      if (err.response?.status === 403) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('activeSessions');
+        window.location.href = '/login';
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+  const endSession = async (consoleName) => {
+    console.log(`Ending session for console: ${consoleName}`);
+    if (endingSessionsRef.current.has(consoleName)) {
+      console.log(`Session ${consoleName} already being ended`);
+      return;
+    }
+    endingSessionsRef.current.add(consoleName);
+
+    try {
+      const session = activeSessions.get(consoleName);
+      if (!session) {
+        console.log(`No session found for console: ${consoleName}, forcing console to Free status`);
+
+        // Force console to Free status even if no session found
+        const targetConsole = consoles.find(c => c.name === consoleName);
+        if (targetConsole) {
+          const token = localStorage.getItem('token');
+          try {
+            await axios.post(
+              `${process.env.REACT_APP_API_BASE_URL}/api/consoles/update`,
+              { id: targetConsole.id, status: 'Free' },
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            await fetchConsoles();
+          } catch (updateErr) {
+            console.error('Failed to update console status:', updateErr);
+          }
+        }
+
+        endingSessionsRef.current.delete(consoleName);
+        return;
+      }
+
+      playNotificationSound();
+
+      const targetConsole = consoles.find(c => c.name === consoleName);
+      const apiConsoleId = targetConsole ? targetConsole.id : consoleName;
+
+      console.log('Ending session for console:', consoleName, 'API ID:', apiConsoleId);
+
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setError('Please log in to access console management');
+        endingSessionsRef.current.delete(consoleName);
+        return;
+      }
+
+      // Try different approaches for the stop session API
+      let stopRes;
+      try {
+        // First try with sessionId if available
+        if (session.sessionId) {
+          stopRes = await axios.post(
+            `${process.env.REACT_APP_API_BASE_URL}/api/sessions/stop`,
+            { sessionId: session.sessionId },
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+        } else {
+          throw new Error('No sessionId available');
+        }
+      } catch (error) {
+        console.log('SessionId approach failed, trying console name:', error.message);
+        try {
+          // Try with console name
+          stopRes = await axios.post(
+            `${process.env.REACT_APP_API_BASE_URL}/api/sessions/stop`,
+            { console: consoleName },
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+        } catch (error2) {
+          console.log('Console name approach failed, trying console ID:', error2.message);
+          // Try with console ID
+          stopRes = await axios.post(
+            `${process.env.REACT_APP_API_BASE_URL}/api/sessions/stop`,
+            { console: apiConsoleId },
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+        }
+      }
+
+      // Update console status to Free
+      const updateRes = await axios.post(
+        `${process.env.REACT_APP_API_BASE_URL}/api/consoles/update`,
+        { id: apiConsoleId, status: 'Free' },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      console.log('Stop session response:', stopRes.data);
+      console.log('Update console response:', updateRes.data);
+
+      setActiveSessions((prev) => {
+        const newMap = new Map(prev);
+        newMap.delete(consoleName);
+        return newMap;
+      });
+
+      showNotification(`Time's up for ${session.playerName} on ${consoleName}!`, 'warning');
+      await fetchConsoles();
+    } catch (err) {
+      console.error('Error ending session:', err);
+
+      // If all API calls fail, still clean up the local state
+      setActiveSessions((prev) => {
+        const newMap = new Map(prev);
+        newMap.delete(consoleName);
+        return newMap;
+      });
+
+      // Try to update console status even if stop session failed
+      try {
+        const targetConsole = consoles.find(c => c.name === consoleName);
+        const apiConsoleId = targetConsole ? targetConsole.id : consoleName;
+        await axios.post(
+          `${process.env.REACT_APP_API_BASE_URL}/api/consoles/update`,
+          { id: apiConsoleId, status: 'Free' },
+          { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
+        );
+      } catch (updateErr) {
+        console.error('Failed to update console status:', updateErr);
+      }
+
+      showNotification(
+        err.response?.status === 403 ? 'Unauthorized access. Please log in again.' : `Session ended locally due to API error: ${err.response?.data?.error || err.message}`,
+        'warning'
+      );
+
+      await fetchConsoles();
+    } finally {
+      endingSessionsRef.current.delete(consoleName);
+    }
+  };
+  const extendSession = async (consoleName, extraMinutes) => {
+    const session = activeSessions.get(consoleName);
+    if (!session) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setError('Please log in to access console management');
+        return;
+      }
+      const targetConsole = consoles.find(c => c.name === consoleName || c.id === consoleName);
+      const apiConsoleId = targetConsole ? targetConsole.id : consoleName;
+
+      await axios.post(
+        `${process.env.REACT_APP_API_BASE_URL}/api/sessions/extend`,
+        { console: apiConsoleId, extraMinutes: parseInt(extraMinutes) },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      const newEndTime = moment(session.endTime).add(extraMinutes, 'minutes').valueOf();
+      const newRemainingTime = Math.max(0, Math.floor((newEndTime - Date.now()) / 1000));
+
+      setActiveSessions((prev) => {
+        const newMap = new Map(prev);
+        newMap.set(consoleName, {
+          ...session,
+          timerId: null,
+          endTime: newEndTime,
+          remainingTime: newRemainingTime,
+          duration: session.duration + parseInt(extraMinutes),
+          totalAmount: calculatePrice(new Date(newEndTime)),
+        });
+        return newMap;
+      });
+
+      await fetchConsoles();
+      showNotification(`Session extended by ${extraMinutes} minutes for ${session.playerName}`, 'success');
+    } catch (err) {
+      console.error('Extend session error:', err);
+      showNotification(
+        err.response?.status === 403 ? 'Unauthorized access. Please log in again.' : `Failed to extend session: ${err.response?.data?.error || err.message}`,
+        'error'
+      );
+      if (err.response?.status === 403) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('activeSessions');
+        window.location.href = '/login';
+      }
+    }
+  };
+
+  const updateAddOns = async (consoleName) => {
+    const session = activeSessions.get(consoleName);
+    if (!session) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setError('Please log in to access console management');
+        return;
+      }
+      const targetConsole = consoles.find(c => c.name === consoleName || c.id === consoleName);
+      const apiConsoleId = targetConsole ? targetConsole.id : consoleName;
+
+      await axios.post(
+        `${process.env.REACT_APP_API_BASE_URL}/api/sessions/add-ons`,
+        { console: apiConsoleId, addOns, controllerCount },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      // Calculate new total price based on session duration and updated add-ons
+      const playerCount = controllerCount + 1;
+      const sessionDuration = session.duration;
+      const currentTime = new Date();
+      const hour = currentTime.getHours();
+      const isHappyHour = hour >= 13 && hour < 17;
+      const isEvening = hour >= 17 && hour < 24;
+
+      let basePrice;
+      if (isHappyHour) {
+        if (playerCount === 2) {
+          basePrice = sessionDuration === 30 ? 40 : sessionDuration === 60 ? 40 : (sessionDuration / 60) * 40;
+        } else {
+          basePrice = playerCount * (sessionDuration === 30 ? 20 : sessionDuration === 60 ? 30 : (sessionDuration / 60) * 30);
+        }
+      } else if (isEvening) {
+        if (playerCount === 1) {
+          basePrice = sessionDuration === 30 ? 20 : sessionDuration === 60 ? 30 : (sessionDuration / 60) * 30;
+        } else if (playerCount === 2) {
+          basePrice = sessionDuration === 30 ? 40 : sessionDuration === 60 ? 60 : (sessionDuration / 30) * 40;
+        } else {
+          basePrice = playerCount * (sessionDuration === 30 ? 20 : sessionDuration === 60 ? 30 : (sessionDuration / 60) * 30);
+        }
+      } else {
+        basePrice = playerCount * (sessionDuration === 30 ? 20 : sessionDuration === 60 ? 30 : (sessionDuration / 60) * 30);
+      }
+
+      const coldDrinkPrice = addOns.coldDrinkCount * parseInt(settings.coldDrinkPrice || 15);
+      const waterPrice = addOns.waterCount * parseInt(settings.waterPrice || 10);
+      const snackPrice = addOns.snackCount * parseInt(settings.snackPrice || 5);
+      const newTotalAmount = Math.max(0, basePrice + coldDrinkPrice + waterPrice + snackPrice);
+
+      setActiveSessions((prev) => {
+        const newMap = new Map(prev);
+        newMap.set(consoleName, {
+          ...session,
+          addOns: { ...addOns },
+          controllerCount,
+          totalAmount: newTotalAmount,
+        });
+        return newMap;
+      });
+
+      showNotification(`Add-ons updated for ${session.playerName}`, 'success');
+      setShowAddOnModal(false);
+    } catch (err) {
+      console.error('Update add-ons error:', err);
+      showNotification(
+        err.response?.status === 403 ? 'Unauthorized access. Please log in again.' : `Failed to update add-ons: ${err.response?.data?.error || err.message}`,
+        'error'
+      );
+      if (err.response?.status === 403) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('activeSessions');
+        window.location.href = '/login';
+      }
+    }
+  };
+
+  const updateTimers = () => {
+    setActiveSessions((prev) => {
+      const newMap = new Map();
+      let hasChanges = false;
+
+      prev.forEach((session, consoleName) => {
+        if (endingSessionsRef.current.has(consoleName)) {
+          // Keep the session in the map while it's being ended
+          newMap.set(consoleName, session);
+          return;
+        }
+
+        const newRemainingTime = Math.max(0, session.remainingTime - 1);
+
+        // Play warning sounds
+        if (newRemainingTime === 300 && session.remainingTime > 300) {
+          playNotificationSound();
+          showNotification(`⚠️ 5 minutes remaining for ${session.playerName} on ${consoleName}!`, 'warning');
+        }
+
+        if (newRemainingTime === 60 && session.remainingTime > 60) {
+          playNotificationSound();
+          showNotification(`⚠️ 1 minute remaining for ${session.playerName} on ${consoleName}!`, 'warning');
+        }
+
+        // End session when timer reaches 0
+        if (newRemainingTime <= 0 && session.remainingTime > 0) {
+          console.log(`Timer reached 0 for console ${consoleName}, ending session`);
+          // Don't add to new map, and trigger endSession
+          setTimeout(() => endSession(consoleName), 100);
+          hasChanges = true;
+          return; // Don't add this session to the new map
+        }
+
+        if (newRemainingTime !== session.remainingTime) {
+          hasChanges = true;
+        }
+
+        // Add session to new map with updated timer
+        newMap.set(consoleName, {
+          ...session,
+          remainingTime: newRemainingTime,
+        });
+      });
+
+      return hasChanges ? newMap : prev;
+    });
+  };
+
+  const showNotification = (message, type) => {
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.textContent = message;
+    notification.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 15px 20px;
+      border-radius: 5px;
+      color: white;
+      font-weight: bold;
+      z-index: 1000;
+      animation: slideIn 0.5s ease;
+      max-width: 300px;
+      word-wrap: break-word;
+      ${type === 'error' ? 'background-color: #dc3545;' : ''}
+      ${type === 'success' ? 'background-color: #28a745;' : ''}
+      ${type === 'warning' ? 'background-color: #ffc107; color: #212529;' : ''}
+    `;
+
+    document.body.appendChild(notification);
+
+    setTimeout(() => {
+      notification.style.animation = 'slideOut 0.5s ease forwards';
+      setTimeout(() => {
+        if (notification.parentNode) {
+          notification.remove();
+        }
+      }, 500);
+    }, 4000);
+  };
+
+  const formatTime = (seconds) => {
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${minutes}m ${secs}s`;
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('activeSessions');
+    window.location.href = '/login';
+  };
+
+  const handleAddOnChange = (key, value) => {
+    const numValue = Math.max(0, parseInt(value) || 0);
+    setAddOns((prev) => ({ ...prev, [key]: numValue }));
+  };
+
+  return (
+    <div className="console-management-container">
+      <RealTimeClock onTimeUpdate={(time) => {
+        setActiveSessions((prev) => {
+          const newMap = new Map(prev);
+          prev.forEach((session, consoleName) => {
+            newMap.set(consoleName, { ...session, totalAmount: calculatePrice(time) });
+          });
+          return newMap;
+        });
+      }} />
+      <h1>Console Management</h1>
+      {error && (
+        <div className="error-banner">
+          <span>{error}</span>
+          {error.includes('Unauthorized') && (
+            <button onClick={handleLogout}>Log In</button>
+          )}
+          <button onClick={fetchConsoles}>Retry</button>
+        </div>
+      )}
+      <div className="console-grid">
+        {consoles.map((console) => (
+          <div
+            key={console.id}
+            className={`console-card ${console.status === 'Free' ? 'free' : 'in-use'}`}
+          >
+            <div className="console-header-card">
+              <h3>{console.name}</h3>
+              <div className={`status-indicator ${console.status === 'Free' ? 'free' : 'in-use'}`}>
+                <span className="status-dot"></span>
+                {console.status}
+              </div>
+            </div>
+            <div className="console-content">
+              {console.status === 'Free' ? (
+                <div className="free-console">
+                  <p>Available</p>
+                  <button onClick={() => openStartModal(console.name)} disabled={loading || error?.includes('Unauthorized')}>
+                    Start Session
+                  </button>
+                </div>
+              ) : (
+                <div className="active-console">
+                  <div className="time-display">
+                    <div className="time-remaining">
+                      <span>Time Remaining:</span>
+                      <span className="time-value">
+                        {formatTime(activeSessions.get(console.name)?.remainingTime || 0)}
+                      </span>
+                    </div>
+                    <div className="progress-bar">
+                      <div
+                        className="progress-fill"
+                        style={{
+                          width: `${((activeSessions.get(console.name)?.remainingTime || 0) /
+                            (activeSessions.get(console.name)?.duration * 60 || 1)) * 100
+                            }%`,
+                        }}
+                      ></div>
+                    </div>
+                  </div>
+                  <div className="session-details">
+                    <p><strong>Player:</strong> {activeSessions.get(console.name)?.playerName || 'Unknown'}</p>
+                    <p>
+                      <strong>Started:</strong>{' '}
+                      {moment(activeSessions.get(console.name)?.startTime).format('HH:mm:ss')}
+                    </p>
+                    <p>
+                      <strong>Controllers:</strong> {activeSessions.get(console.name)?.controllerCount || 0}
+                    </p>
+                    <p>
+                      <strong>Add-ons:</strong>{' '}
+                      {[
+                        activeSessions.get(console.name)?.addOns.coldDrinkCount > 0
+                          ? `${activeSessions.get(console.name)?.addOns.coldDrinkCount} Cold Drinks`
+                          : '',
+                        activeSessions.get(console.name)?.addOns.waterCount > 0
+                          ? `${activeSessions.get(console.name)?.addOns.waterCount} Water`
+                          : '',
+                        activeSessions.get(console.name)?.addOns.snackCount > 0
+                          ? `${activeSessions.get(console.name)?.addOns.snackCount} Snacks`
+                          : '',
+                      ]
+                        .filter(Boolean)
+                        .join(', ') || 'None'}
+                    </p>
+                    <p>
+                      <strong>Total:</strong> ₹{Number(activeSessions.get(console.name)?.totalAmount || 0).toFixed(2)}
+                    </p>
+                  </div>
+                  <div className="session-controls">
+                    <select
+                      className="extend-select"
+                      onChange={(e) => {
+                        if (e.target.value) extendSession(console.name, parseInt(e.target.value));
+                        e.target.value = '';
+                      }}
+                      disabled={error?.includes('Unauthorized')}
+                    >
+                      <option value="">Extend Session</option>
+                      <option value="15">15 minutes</option>
+                      <option value="30">30 minutes</option>
+                      <option value="60">1 hour</option>
+                    </select>
+                    <button
+                      className="add-on-btn"
+                      onClick={() => openAddOnModal(console.name)}
+                      disabled={error?.includes('Unauthorized')}
+                    >
+                      Add Items
+                    </button>
+                    <button
+                      className="stop-btn"
+                      onClick={() => endSession(console.name)}
+                      disabled={error?.includes('Unauthorized')}
+                    >
+                      Stop Session
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {showStartModal && (
+        <div className="modal">
+          <div className="modal-content">
+            <h2>Start Session on {selectedConsole}</h2>
+            <div className="modal-form">
+              <label>Player Name</label>
+              <input
+                type="text"
+                value={playerName}
+                onChange={(e) => setPlayerName(e.target.value)}
+                placeholder="Enter player name"
+              />
+              <label>Controller Count</label>
+              <input
+                type="number"
+                min="0"
+                value={controllerCount}
+                onChange={(e) => setControllerCount(Math.max(0, parseInt(e.target.value) || 0))}
+                placeholder="0"
+              />
+              <label>Duration</label>
+              <select value={duration} onChange={(e) => setDuration(e.target.value)}>
+                <option value="30">30 minutes</option>
+                <option value="45">45 minutes</option>
+                <option value="60">1 hour</option>
+                <option value="90">1.5 hours</option>
+                <option value="120">2 hours</option>
+              </select>
+              <label>Add-ons</label>
+              <div className="addon-input">
+                <span>Cold Drinks (₹{settings.coldDrinkPrice || 15} per bottle)</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={addOns.coldDrinkCount}
+                  onChange={(e) => handleAddOnChange('coldDrinkCount', e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+              <div className="addon-input">
+                <span>Water (₹{settings.waterPrice || 10} each)</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={addOns.waterCount}
+                  onChange={(e) => handleAddOnChange('waterCount', e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+              <div className="addon-input">
+                <span>Snacks (₹{settings.snackPrice || 5} each)</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={addOns.snackCount}
+                  onChange={(e) => handleAddOnChange('snackCount', e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+              <div className="total-price">Total: ₹{calculatePrice().toFixed(2)}</div>
+            </div>
+            <div className="modal-buttons">
+              <button onClick={startSession} disabled={loading || error?.includes('Unauthorized')}>
+                Start
+              </button>
+              <button onClick={() => setShowStartModal(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAddOnModal && (
+        <div className="modal">
+          <div className="modal-content">
+            <h2>Add Items to {selectedConsole}</h2>
+            <div className="modal-form">
+              <label>Controller Count</label>
+              <input
+                type="number"
+                min="0"
+                value={controllerCount}
+                onChange={(e) => setControllerCount(Math.max(0, parseInt(e.target.value) || 0))}
+                placeholder="0"
+              />
+              <label>Add-ons</label>
+              <div className="addon-input">
+                <span>Cold Drinks (₹{settings.coldDrinkPrice || 15} per bottle)</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={addOns.coldDrinkCount}
+                  onChange={(e) => handleAddOnChange('coldDrinkCount', e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+              <div className="addon-input">
+                <span>Water (₹{settings.waterPrice || 10} each)</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={addOns.waterCount}
+                  onChange={(e) => handleAddOnChange('waterCount', e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+              <div className="addon-input">
+                <span>Snacks (₹{settings.snackPrice || 5} each)</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={addOns.snackCount}
+                  onChange={(e) => handleAddOnChange('snackCount', e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+            </div>
+            <div className="modal-buttons">
+              <button onClick={() => updateAddOns(selectedConsole)} disabled={loading || error?.includes('Unauthorized')}>
+                Update
+              </button>
+              <button onClick={() => setShowAddOnModal(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default ConsoleManagement;
