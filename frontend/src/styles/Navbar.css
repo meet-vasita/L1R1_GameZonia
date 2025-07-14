@@ -1,3 +1,4 @@
+/* Base Navbar Styles */
 .navbar {
   display: flex;
   justify-content: space-between;
@@ -10,13 +11,15 @@
   position: sticky;
   top: 0;
   z-index: 1000;
+  min-height: 60px;
 }
 
-.navbar h2 {
+.nav-brand h2 {
   margin: 0;
   font-size: 1.5rem;
   font-weight: 700;
   color: #1e3c72;
+  white-space: nowrap;
 }
 
 .toggle-btn {
@@ -27,10 +30,13 @@
   color: #2d3748;
   cursor: pointer;
   transition: color 0.2s ease;
+  padding: 0.5rem;
+  border-radius: 4px;
 }
 
 .toggle-btn:hover {
   color: #6366f1;
+  background: #edf2f7;
 }
 
 .nav-links {
@@ -47,6 +53,7 @@
   padding: 0.5rem 1rem;
   border-radius: 6px;
   transition: background 0.2s ease, color 0.2s ease;
+  white-space: nowrap;
 }
 
 .nav-links a:hover {
@@ -67,9 +74,10 @@
 
 .welcome-msg {
   font-size: 0.9rem;
-  font-weight: 400; /* Changed from 500 to 400 for lighter appearance */
-  color: #6b7280; /* Changed to a lighter gray color */
-  font-style: italic; /* Added italic for elegance */
+  font-weight: 400;
+  color: #6b7280;
+  font-style: italic;
+  white-space: nowrap;
 }
 
 .logout-btn {
@@ -82,6 +90,7 @@
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s ease, transform 0.2s ease;
+  white-space: nowrap;
 }
 
 .logout-btn:hover {
@@ -93,9 +102,72 @@
   transform: translateY(0);
 }
 
+/* Laptop/Desktop Responsive (1024px - 1366px) */
+@media (max-width: 1366px) {
+  .navbar {
+    padding: 1rem 1.5rem;
+  }
+  
+  .nav-links {
+    gap: 1rem;
+  }
+  
+  .nav-links a {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.9rem;
+  }
+  
+  .nav-brand h2 {
+    font-size: 1.4rem;
+  }
+}
+
+/* Tablet/Small Laptop (768px - 1024px) */
 @media (max-width: 1024px) {
+  .navbar {
+    padding: 1rem;
+  }
+  
+  .nav-links {
+    gap: 0.8rem;
+  }
+  
+  .nav-links a {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.85rem;
+  }
+  
+  .nav-brand h2 {
+    font-size: 1.3rem;
+  }
+  
+  .welcome-msg {
+    font-size: 0.85rem;
+  }
+  
+  .logout-btn {
+    padding: 0.45rem 0.8rem;
+    font-size: 0.9rem;
+  }
+}
+
+/* Mobile Landscape/Small Tablet (768px and below) */
+@media (max-width: 768px) {
+  .navbar {
+    padding: 0.8rem 1rem;
+    position: relative;
+    justify-content: flex-end; /* Push content to the right */
+  }
+  
+  .nav-brand {
+    display: none; /* Hide logo on mobile */
+  }
+  
   .toggle-btn {
     display: block;
+    position: absolute;
+    left: 1rem; /* Position hamburger menu on the left */
+    order: -1;
   }
   
   .nav-links {
@@ -107,9 +179,10 @@
     right: 0;
     background: #ffffff;
     padding: 1rem;
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
     border-radius: 0 0 12px 12px;
     animation: slideIn 0.3s ease-out;
+    gap: 0.5rem;
   }
   
   .nav-links.active {
@@ -117,35 +190,106 @@
   }
   
   .nav-links a {
-    padding: 0.75rem;
+    padding: 0.75rem 1rem;
     text-align: center;
+    width: 100%;
+    border-radius: 8px;
   }
   
   .nav-right {
     gap: 0.75rem;
-  }
-}
-
-@media (max-width: 480px) {
-  .navbar {
-    padding: 1rem;
-  }
-  
-  .navbar h2 {
-    font-size: 1.25rem;
+    margin-left: auto; /* Keep username and logout on the right */
   }
   
   .welcome-msg {
     font-size: 0.8rem;
-    padding: 0.3rem 0.6rem;
   }
   
   .logout-btn {
-    padding: 0.5rem 0.75rem;
+    padding: 0.45rem 0.75rem;
     font-size: 0.85rem;
   }
 }
 
+/* Mobile Portrait (480px and below) */
+@media (max-width: 480px) {
+  .navbar {
+    padding: 0.75rem 0.8rem;
+    justify-content: flex-end; /* Keep content aligned to the right */
+  }
+  
+  .nav-brand {
+    display: none; /* Keep logo hidden */
+  }
+  
+  .toggle-btn {
+    position: absolute;
+    left: 0.8rem; /* Keep hamburger on the left */
+  }
+  
+  .nav-right {
+    gap: 0.5rem;
+  }
+  
+  .welcome-msg {
+    font-size: 0.75rem; /* Keep welcome message visible but smaller */
+  }
+  
+  .logout-btn {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8rem;
+  }
+  
+  .nav-links {
+    padding: 0.8rem;
+  }
+  
+  .nav-links a {
+    padding: 0.6rem 0.8rem;
+    font-size: 0.9rem;
+  }
+}
+
+/* Very Small Mobile (360px and below) */
+@media (max-width: 360px) {
+  .navbar {
+    padding: 0.6rem;
+    justify-content: flex-end; /* Keep content aligned to the right */
+  }
+  
+  .nav-brand {
+    display: none; /* Keep logo hidden */
+  }
+  
+  .toggle-btn {
+    position: absolute;
+    left: 0.6rem; /* Keep hamburger on the left */
+  }
+  
+  .nav-right {
+    gap: 0.4rem;
+  }
+  
+  .welcome-msg {
+    font-size: 0.7rem; /* Keep welcome message but very small */
+  }
+  
+  .logout-btn {
+    padding: 0.35rem 0.5rem;
+    font-size: 0.75rem;
+  }
+  
+  .nav-links {
+    padding: 0.6rem;
+  }
+  
+  .nav-links a {
+    padding: 0.5rem 0.6rem;
+    font-size: 0.85rem;
+  }
+}
+
+/* Animation for mobile menu */
 @keyframes slideIn {
   from {
     opacity: 0;
@@ -154,5 +298,19 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* Overlay for mobile menu (optional) */
+@media (max-width: 768px) {
+  .nav-links.active::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.2);
+    z-index: -1;
   }
 }
